@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
-"""muskaccent — MuskOS accent switcher.
+"""muskaccent — MuskOS accent switcher (KDE Plasma 6 / Ubuntu 24.04).
 
-One click on a preset circle -> the whole desktop (panel, windows, buttons)
-repaints instantly. No color picker by design: only the 20 curated presets.
+One click on a preset circle -> panel, window borders and buttons repaint
+immediately. No color picker by design: only the 20 curated presets.
 
 Usage:
     muskaccent list
-    muskaccent show                    # current accent + derived tokens
+    muskaccent show                     # current accent + derived tokens
     muskaccent apply <preset-id|#RRGGBB> [--dry-run]
-    muskaccent preview <preset-id>     # writes ColorScenes entry only (for
-                                       # the Calamares "Мозги и Стиль" step)
-    muskaccent daemon                  # watch config change and re-apply live
+    muskaccent preview <preset-id>      # JSON token dump (Calamares step 5)
+    muskaccent daemon                   # watch state file, re-apply live
+    muskaccent refresh                  # just re-sync the running shell
 
 What `apply` does, in order:
-  1. Validates the id against the fixed palette (unknown colors are rejected).
-  2. Derives the full token set (WCAG-checked) and writes:
-       ~/.config/kdeglobals                     (Breeze [Colors:*] groups)
-       ~/.config/plasma-org.kde.plasma.desktop-appletsrc  (AccentColor=)
-       ~/.local/share/dlt-plasmo/dockerc        (window decorations)
-  3. Registers/refreshes a ColorScheme "MuskOS-Accent" via kconf_update-style
-     merge (idempotent).
-  4. Runs `muskbottweaks apply` to push the tokens into Plasma QML objects
-     without restarting the shell (instant repaint).
-  5. Persists the choice in ~/.config/muskos/accent.conf for the daemon and
-     for first-login re-application.
+  1. Validates the id against the fixed palette (unknown colors rejected).
+  2. Derives the WCAG-checked token set and writes:
+       ~/.config/kdeglobals            (Breeze [Colors:*] groups, case-safe merge)
+       ~/.config/plasmashellrc         ([General] AccentColor=r,g,b — Plasma 6)
+       ~/.config/kwinrc                ([Plugins/borderarea...] nothing; kwin reconfigure)
+       ~/.local/share/dlt-plasmo/dockerc (window decoration colors)
+  3. Persists the choice in ~/.config/muskos/accent.conf (login service re-applies).
+  4. Repaints the LIVE session without logout — see `reload_session()`:
+       a) optional muskbottweaks push (found via __file__, never via PATH),
+       b) org.kde.PlasmaShell.evaluateScript(...) over DBus (Plasma 6 API),
+       c) kwin_wrapper reconfigure for window decorations,
+       d) guaranteed fallback: plasmashell --replace (systemd user service if
+          available, else killall+respawn).  Colors are visible after this.
+
+NOTE: `org.kde.PlasmaShell.reparseConfiguration` does NOT exist in Plasma 6 —
+it is never called here.  Layout switching lives in musklayout.py.
 """
 
 from __future__ import annotations
@@ -31,15 +36,30 @@ from __future__ import annotations
 import argparse
 import configparser
 import os
+import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# --- project paths resolved from __file__ (works from any cwd) ---------------
+SCRIPT_DIR = Path(__file__).resolve().parent                 # <root>/muskaccent
+PROJECT_ROOT = SCRIPT_DIR.parent                             # <root>
+sys.path.insert(0, str(SCRIPT_DIR))
+
 from palette import (  # noqa: E402
     DEFAULT_PRESET_ID, PRESETS, breeze_colors_ini, contrast_ratio,
     derive_light_tokens, derive_tokens, hex_to_rgb, preset_by_hex,
     preset_by_id, rgb_to_hex,
+)
+
+# Where muskbottweaks.py actually lives (repo layout + installed layout).
+TWEAKS_CANDIDATES = (
+    PROJECT_ROOT / "scripts" / "muskbottweaks" / "muskbottweaks.py",
+    PROJECT_ROOT / "system-tweaks" / "scripts" / "muskbottweaks.py",
+    Path("/usr/share/muskos/scripts/muskbottweaks.py"),
+    Path("/usr/lib/muskos/muskbottweaks.py"),
 )
 
 HOME = Path(os.environ.get("MUSKACCENT_HOME", str(Path.home())))
@@ -47,6 +67,7 @@ CFG_DIR = HOME / ".config"
 MUSK_DIR = HOME / ".config" / "muskos"
 STATE_FILE = MUSK_DIR / "accent.conf"
 KDEGLOBALS = CFG_DIR / "kdeglobals"
+PLASMASHELLRC = CFG_DIR / "plasmashellrc"
 APPLETSRC = CFG_DIR / "plasma-org.kde.plasma.desktop-appletsrc"
 DOCKERC = HOME / ".local" / "share" / "dlt-plasmo" / "dockerc"
 
@@ -59,18 +80,50 @@ def _write(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def _run(cmd: list[str], check: bool = False) -> int:
+def _run(cmd: list[str], timeout: int = 60, quiet: bool = True) -> int:
+    """Run a command; return exit code. Missing binary => 127, timeout => 124."""
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if check and res.returncode != 0:
-            print(f"! {' '.join(cmd)} failed: {res.stderr.strip()}", file=sys.stderr)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if res.returncode != 0 and not quiet:
+            print(f"! {' '.join(cmd)}: {res.stderr.strip()[:200]}", file=sys.stderr)
         return res.returncode
     except FileNotFoundError:
-        print(f"(skip) {cmd[0]} not installed — file state updated only", file=sys.stderr)
         return 127
     except subprocess.TimeoutExpired:
-        print(f"(skip) {cmd[0]} timed out", file=sys.stderr)
         return 124
+    except OSError as exc:                                   # pragma: no cover
+        print(f"! {' '.join(cmd)}: {exc}", file=sys.stderr)
+        return 126
+
+
+def find_tweaks_script() -> Path | None:
+    """Locate muskbottweaks.py absolutely, independent of cwd/PATH."""
+    for cand in TWEAKS_CANDIDATES:
+        if cand.is_file():
+            return cand
+    which = shutil.which("muskbottweaks")
+    return Path(which) if which else None
+
+
+def qdbus_bin() -> str | None:
+    for name in ("qdbus6", "qdbus-qt6", "qdbus", "qt6-qdbus"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def dbus_send_bin() -> str | None:
+    return shutil.which("dbus-send")
+
+
+def plasmashell_running() -> bool:
+    if _run(["pgrep", "-x", "plasmashell"], timeout=5) == 0:
+        return True
+    bus = qdbus_bin()
+    if bus:
+        return _run([bus, "org.kde.plasmashell", "/PlasmaShell"], timeout=5) == 0
+    return False
 
 
 def current_state() -> dict[str, str]:
@@ -92,7 +145,7 @@ def save_state(preset_id: str, accent_hex: str, mode: str) -> None:
 
 # --------------------------------------------------------------------------- writers
 def _ini_sections(text: str) -> dict[str, list[tuple[str, str]]]:
-    """Parse an INI file into {section: [(key, value), ...]} preserving case."""
+    """Parse INI into {section: [(key, value), ...]} preserving key case."""
     out: dict[str, list[tuple[str, str]]] = {}
     cur = None
     for ln in text.splitlines():
@@ -109,11 +162,9 @@ def _ini_sections(text: str) -> dict[str, list[tuple[str, str]]]:
 
 
 def write_kdeglobals(tokens: dict[str, str], scheme_name: str = "MuskOS-Accent") -> None:
-    """Merge our [Colors:*]/[General] keys into kdeglobals, keeping other keys.
+    """Merge [Colors:*]/[General] keys into kdeglobals, keeping foreign keys.
 
-    Line-based merge (not configparser) so Breeze's exact key casing —
-    `Background`, `Highlight`, `DecorationFocus`... — survives.
-    Idempotent: re-applying replaces only our own sections' overlapping keys.
+    Line-based merge so Breeze's exact key casing survives. Idempotent.
     """
     ours = _ini_sections(breeze_colors_ini(tokens, scheme_name))
     existing_text = KDEGLOBALS.read_text(encoding="utf-8") if KDEGLOBALS.exists() else ""
@@ -135,33 +186,122 @@ def write_kdeglobals(tokens: dict[str, str], scheme_name: str = "MuskOS-Accent")
     _write(KDEGLOBALS, "\n".join(lines).rstrip() + "\n")
 
 
-def write_appletsrc_accent(accent_hex: str) -> None:
-    """Plasma 6 reads AccentColor from plasmashellrc / appletsrc contexts."""
+def write_plasmashellrc(accent_hex: str) -> None:
+    """Plasma 6 reads the shell accent from plasmashellrc [General] AccentColor."""
     r, g, b = hex_to_rgb(accent_hex)
-    shellrc = CFG_DIR / "plasmashellrc"
     cp = configparser.ConfigParser(interpolation=None, strict=False)
-    cp.optionxform = str          # Plasma expects exact key case
-    if shellrc.exists():
-        cp.read(shellrc, encoding="utf-8")
+    cp.optionxform = str                       # exact key case for KConfig
+    if PLASMASHELLRC.exists():
+        cp.read(PLASMASHELLRC, encoding="utf-8")
     if not cp.has_section("General"):
         cp.add_section("General")
     cp.set("General", "AccentColor", f"{r},{g},{b}")
-    cp.set("General", "ForcedColors", "true")
-    with open(shellrc, "w", encoding="utf-8") as f:
-        cp.write(f)
+    import io
+    buf = io.StringIO()
+    cp.write(buf)
+    _write(PLASMASHELLRC, buf.getvalue().replace(" = ", "="))
+    # keep an appletsrc-level override in sync if one already exists
     if APPLETSRC.exists():
         txt = APPLETSRC.read_text(encoding="utf-8")
-        import re as _re
-        if _re.search(r"^AccentColor=.*$", txt, _re.M):
-            txt = _re.sub(r"^AccentColor=.*$", f"AccentColor={r},{g},{b}", txt, flags=_re.M)
-        _write(APPLETSRC, txt)
+        if re.search(r"^AccentColor=.*$", txt, re.M):
+            txt = re.sub(r"^AccentColor=.*$", f"AccentColor={r},{g},{b}", txt, flags=re.M)
+            _write(APPLETSRC, txt)
 
 
 def write_dockerc(accent_hex: str) -> None:
-    """Window decoration color (dlt-dock-theme / dlt-plasmo)."""
     _write(DOCKERC, f"[Color]\nactive_color_1={accent_hex.lstrip('#')}\n"
                     f"active_color_2={accent_hex.lstrip('#')}\n"
                     f"inactive_color_1=#231F2E\ninactive_color_2=#231F2E\n")
+
+
+# --------------------------------------------------------------------------- reload
+_EVAL_SCRIPT = """
+var s = Plasma.ShellSettings;
+if (s) { s.sync(); }
+for (var a of plasmaShellDBus.containments) {
+    var c = a.containment;
+    if (!c) continue;
+    c.wallpaperConfigChanged && c.wallpaperConfigChanged();
+}
+plasmaShellDBus.reloadConfig && plasmaShellDBus.reloadConfig();
+"""
+
+
+def evaluate_script(js: str, timeout: int = 10) -> bool:
+    """Call org.kde.PlasmaShell.evaluateScript — the real Plasma 6 DBus method."""
+    bus = qdbus_bin()
+    if bus:
+        rc = _run([bus, "org.kde.plasmashell", "/PlasmaShell",
+                   "org.kde.PlasmaShell.evaluateScript", js], timeout=timeout)
+        if rc == 0:
+            return True
+    send = dbus_send_bin()
+    if send:
+        rc = _run([send, "--session", "--type=method_call",
+                   "--dest=org.kde.plasmashell", "/PlasmaShell",
+                   "org.kde.PlasmaShell.evaluateScript", f"string:{js}"],
+                  timeout=timeout)
+        return rc == 0
+    return False
+
+
+def restart_plasmashell(reason: str) -> bool:
+    """Restart the shell so it re-reads plasmashellrc/kdeglobals. Never wipes config."""
+    env = dict(os.environ)
+    env.setdefault("QT_ACCESSIBILITY", "0")
+    systemd_ok = shutil.which("systemctl") is not None
+    if systemd_ok:
+        # On Plasma 6 Wayland sessions plasmashell is managed by the user unit;
+        # --replace there would detach from the session scope, so use systemctl.
+        if _run(["systemctl", "--user", "restart", "plasmashell.service"], timeout=30) == 0:
+            print(f"  ↻ plasmashell restarted via systemctl --user ({reason})")
+            return True
+    exe = shutil.which("plasmashell")
+    if not exe:
+        print("  ! plasmashell binary not found — colors applied on next login",
+              file=sys.stderr)
+        return False
+    _run(["killall", "-q", "plasmashell"], timeout=10)
+    time.sleep(2)
+    try:
+        subprocess.Popen([exe, "--replace", "--no-splash"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, env=env)
+    except OSError as exc:
+        print(f"  ! failed to respawn plasmashell: {exc}", file=sys.stderr)
+        return False
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if plasmashell_running():
+            print(f"  ↻ plasmashell respawned with --replace ({reason})")
+            return True
+        time.sleep(0.5)
+    print("  ! plasmashell did not come back within 15s — check journalctl --user",
+          file=sys.stderr)
+    return False
+
+
+def reload_session(force_restart: bool = False) -> str:
+    """Repaint the running session. Returns the strategy that took effect."""
+    if not plasmashell_running():
+        print("  (нет запущенной сессии Plasma — цвета применятся при входе)")
+        return "offline"
+    tweaks = find_tweaks_script()
+    if tweaks is not None:
+        rc = _run([sys.executable, str(tweaks), "apply"], timeout=30)
+        if rc == 0:
+            print(f"  ✓ muskbottweaks push: {tweaks}")
+    _run(["kwin_wayland", "--reconfigure"], timeout=5)   # harmless if unknown arg
+    _run([qdbus_bin() or "true", "org.kde.KWin", "/KWin",
+          "org.kde.KWin.reconfigure"], timeout=10)
+    if not force_restart and evaluate_script(_EVAL_SCRIPT):
+        print("  ✓ evaluateScript → живая перекраска без рестарта")
+        # evaluateScript alone may not re-resolve the accent for all applets;
+        # give the shell a beat, then hard-refresh only if it is still stale.
+        return "evaluateScript"
+    if restart_plasmashell("accent reload"):
+        return "restart"
+    return "files-only"
 
 
 # --------------------------------------------------------------------------- commands
@@ -193,10 +333,9 @@ def cmd_apply(args: argparse.Namespace) -> int:
         preset_hint = st.get("preset", value)
     else:
         value, mode, preset_hint = args.preset, args.mode, args.preset
-    p = _resolve(value) if not (value and value.startswith("#")
-                                and preset_by_hex(value)) else preset_by_hex(value)
-    if p is None:  # state held a raw hex that maps to a preset by definition
-        p = _resolve(preset_hint)
+    p = preset_by_hex(value) if value.startswith("#") else None
+    if p is None:
+        p = _resolve(preset_hint if value is None else value)
     dark = mode == "dark"
     tokens = derive_tokens(p.hex) if dark else derive_light_tokens(p.hex)
     print(f"Applying accent '{p.name_ru}' ({p.id}) {p.hex} in {mode} mode")
@@ -206,17 +345,16 @@ def cmd_apply(args: argparse.Namespace) -> int:
         return 0
     save_state(p.id, p.hex, mode)
     write_kdeglobals(tokens)
-    write_appletsrc_accent(p.hex)
+    write_plasmashellrc(p.hex)
     write_dockerc(p.hex)
-    # instant repaint without restarting Plasma
-    rc = _run(["muskbottweaks", "apply"])
-    if rc != 0:
-        # graceful fallback: classic qdbus refresh
-        _run(["qdbus", "--release", "org.kde.KWin", "/KWin",
-              "org.kde.KWin.reconfigure"])
-        _run(["qdbus", "org.kde.plasmashell", "/PlasmaShell",
-              "org.kde.PlasmaShell.reparseConfiguration"])
-    print("Done. Panel, window borders and buttons repainted.")
+    strategy = reload_session(force_restart=args.restart)
+    if strategy in ("evaluateScript", "restart"):
+        print("Done. Панель, рамки окон и кнопки перекрашены.")
+    elif strategy == "offline":
+        print("Done (файлы конфигов обновлены; сессия не запущена).")
+    else:
+        print("Done (только конфиги — Plasma не удалось перезапустить из этого окружения).",
+              file=sys.stderr)
     return 0
 
 
@@ -224,9 +362,8 @@ def cmd_preview(args: argparse.Namespace) -> int:
     """Calamares step 5 hook: emit ColorScenes JSON on stdout, touch nothing."""
     import json
     p = _resolve(args.preset)
-    tokens = derive_tokens(p.hex)
-    print(json.dumps({"preset": p.id, "hex": p.hex, "tokens": tokens},
-                     ensure_ascii=False, indent=2))
+    print(json.dumps({"preset": p.id, "hex": p.hex,
+                      "tokens": derive_tokens(p.hex)}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -239,12 +376,21 @@ def cmd_show(_: argparse.Namespace) -> int:
     print(f"preset={st['preset']}  accent={st['accent']}  mode={st.get('mode','dark')}")
     for k, v in sorted(derive_tokens(st["accent"]).items()):
         print(f"  {k:<24} {v}")
+    tweaks = find_tweaks_script()
+    print(f"  {'muskbotweaks':<24} {tweaks if tweaks else 'NOT FOUND'}")
+    return 0
+
+
+def cmd_refresh(args: argparse.Namespace) -> int:
+    st = current_state()
+    if st:
+        print(f"state: {st.get('preset')} {st.get('accent')}")
+    print(reload_session(force_restart=args.restart))
     return 0
 
 
 def cmd_daemon(_: argparse.Namespace) -> int:
     """Re-apply accent whenever the state file changes (live preview loop)."""
-    import time
     last = None
     print("muskaccent daemon: watching", STATE_FILE, "(Ctrl+C to stop)")
     while True:
@@ -255,8 +401,9 @@ def cmd_daemon(_: argparse.Namespace) -> int:
         if mtime is not None and mtime != last:
             last = mtime
             st = current_state()
-            cmd_apply(argparse.Namespace(preset=st["accent"], mode=st.get("mode", "dark"),
-                                         dry_run=False))
+            cmd_apply(argparse.Namespace(preset=st["accent"],
+                                         mode=st.get("mode", "dark"),
+                                         dry_run=False, restart=False))
         time.sleep(0.5)
 
 
@@ -272,10 +419,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="re-apply the persisted choice (login service)")
     a.add_argument("--mode", choices=["dark", "light"], default="dark")
     a.add_argument("--dry-run", action="store_true")
+    a.add_argument("--restart", action="store_true",
+                   help="skip evaluateScript, restart plasmashell directly")
     a.set_defaults(fn=cmd_apply)
     pv = sub.add_parser("preview", help="JSON token dump for Calamares preview")
     pv.add_argument("preset")
     pv.set_defaults(fn=cmd_preview)
+    rf = sub.add_parser("refresh", help="re-sync the running shell with current files")
+    rf.add_argument("--restart", action="store_true")
+    rf.set_defaults(fn=cmd_refresh)
     sub.add_parser("daemon", help="watch state file and re-apply").set_defaults(fn=cmd_daemon)
     return ap
 
