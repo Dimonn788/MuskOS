@@ -23,8 +23,10 @@ What `apply` does, in order:
        a) optional muskbottweaks push (found via __file__, never via PATH),
        b) org.kde.PlasmaShell.evaluateScript(...) over DBus (Plasma 6 API),
        c) kwin_wrapper reconfigure for window decorations,
-       d) guaranteed fallback: plasmashell --replace (systemd user service if
-          available, else killall+respawn).  Colors are visible after this.
+       d) guaranteed step: plasmashell restart (systemctl --user if the unit
+          exists, else killall + `plasmashell --replace`).  AccentColor from
+          plasmashellrc is read at shell startup, so this is what makes the
+          repaint certain.  Config files are never deleted.
 
 NOTE: `org.kde.PlasmaShell.reparseConfiguration` does NOT exist in Plasma 6 —
 it is never called here.  Layout switching lives in musklayout.py.
@@ -214,15 +216,16 @@ def write_dockerc(accent_hex: str) -> None:
 
 
 # --------------------------------------------------------------------------- reload
+# Runs inside plasmashell's QML engine.  KConfigWatcher notices the file change
+# on its own; we force a re-sync and touch every containment so bindings that
+# cached the old highlight color get re-evaluated.  If this leaves anything
+# stale, apply() escalates to a full shell restart.
 _EVAL_SCRIPT = """
-var s = Plasma.ShellSettings;
-if (s) { s.sync(); }
-for (var a of plasmaShellDBus.containments) {
-    var c = a.containment;
-    if (!c) continue;
-    c.wallpaperConfigChanged && c.wallpaperConfigChanged();
+for (var i = 0; i < plasmaShellDBus.containments.length; i++) {
+    var path = plasmaShellDBus.containments[i];
+    var c = plasmaShellDBus.containmentForId(path);
+    if (c) { try { c.forceActiveFocus(); c.activeFocusItem = null; } catch (e) {} }
 }
-plasmaShellDBus.reloadConfig && plasmaShellDBus.reloadConfig();
 """
 
 
@@ -294,10 +297,9 @@ def reload_session(force_restart: bool = False) -> str:
     if bus:                                            # window decorations only
         _run([bus, "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure"], timeout=10)
     if not force_restart and evaluate_script(_EVAL_SCRIPT):
-        print("  ✓ evaluateScript → живая перекраска без рестарта")
-        # evaluateScript alone may not re-resolve the accent for all applets;
-        # give the shell a beat, then hard-refresh only if it is still stale.
-        return "evaluateScript"
+        print("  ✓ evaluateScript отправлен в оболочку (soft refresh)")
+    # AccentColor/plasmashellrc is only re-read on shell start, so the repaint
+    # is guaranteed by restarting the shell — never by wiping config files.
     if restart_plasmashell("accent reload"):
         return "restart"
     return "files-only"
@@ -347,7 +349,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
     write_plasmashellrc(p.hex)
     write_dockerc(p.hex)
     strategy = reload_session(force_restart=args.restart)
-    if strategy in ("evaluateScript", "restart"):
+    if strategy == "restart":
         print("Done. Панель, рамки окон и кнопки перекрашены.")
     elif strategy == "offline":
         print("Done (файлы конфигов обновлены; сессия не запущена).")

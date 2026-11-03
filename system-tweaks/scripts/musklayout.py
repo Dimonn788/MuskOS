@@ -210,7 +210,9 @@ def validate_spec(name: str, spec: dict) -> list[str]:
 def reload_shell() -> str:
     """Make Plasma 6 re-read appletsrc. No reparseConfiguration (doesn't exist)."""
     exe = shutil.which("plasmashell")
-    if shutil.which("systemctl") and _run(
+    if exe and shutil.which("systemctl") and _run(
+            ["systemctl", "--user", "is-active", "-q", "plasmashell.service"],
+            timeout=10) == 0 and _run(
             ["systemctl", "--user", "restart", "plasmashell.service"], timeout=40) == 0:
         print("  ↻ plasmashell перезапущен через systemctl --user")
         return "systemctl"
