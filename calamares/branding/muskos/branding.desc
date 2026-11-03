@@ -1,0 +1,15 @@
+# MuskOS branding for Calamares — "космичесная ночь" #2D1B4E
+ComponentName:  MuskOS
+Version: 2.0
+Strings:
+  product: MuskOS
+  version: "2.0 (Plasma 6 / Wayland)"
+  description: Ubuntu 24.04 LTS base, KDE Plasma 6, MuskBot built in.
+SidebarImage: muskos-sidebar.png
+WindowOverlay:
+  Source: sidebar
+Colors:
+  SidebarBackground: "#2D1B4E"     # cosmic night accent = installer chrome
+  SidebarText: "#EDEAF5"
+  SidebarTextSelectionBackground: "#5B3A8E"
+  SidebarTextSelection: "#FFFFFF"

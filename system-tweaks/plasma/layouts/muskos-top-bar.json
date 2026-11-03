@@ -1,0 +1,15 @@
+{
+  "layout": "Top Bar",
+  "description": "Минимализм: тонкая панель сверху, ничего лишнего.",
+  "panels": [{
+    "location": "top", "alignment": "center", "height": 32, "opacity": 0.92,
+    "widgets": {
+      "org.kde.plasma.kickoff": { "iconOnly": true },
+      "org.kde.plasma.pager": {},
+      "org.kde.plasma.taskmanager": { "showToolTips": false },
+      "org.kde.plasma.systemtray": {},
+      "org.kde.plasma.digitalclock": { "dateFormat": "short" }
+    }
+  }],
+  "theme": { "lookAndFeelPackage": "com.muskos.accent", "decoration": "MuskOS-flat", "blur": "standard" }
+}

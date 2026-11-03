@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MuskOS fixed accent palette",
+  "description": "Exactly 20 curated accents; free color picking is intentionally unsupported.",
+  "type": "object",
+  "required": ["default", "presets"],
+  "properties": {
+    "default": {"const": "cosmic-night"},
+    "presets": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["id", "name_ru", "name_en", "hex"],
+        "properties": {
+          "id":     {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+          "name_ru":{"type": "string"},
+          "name_en":{"type": "string"},
+          "hex":    {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
+        }
+      }
+    }
+  }
+}

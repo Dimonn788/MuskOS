@@ -1,0 +1,20 @@
+{
+  "layout": "Win11 Classic",
+  "description": "Панель снизу по центру, скругленные углы, blur (как Win11).",
+  "panels": [{
+    "location": "bottom", "alignment": "center", "floating": true,
+    "height": 48, "hidesWindowBorder": true,
+    "widgets": {
+      "org.kde.panelsudo": {},
+      "org.kde.plasma.kickoff": { "iconOnly": true },
+      "org.kde.plasma.icontasks": { "showLabels": false, "maxBreadth": 40, "groupingEnabled": true },
+      "org.kde.plasma.systemtray": {}
+    }
+  }],
+  "theme": {
+    "wallpaperPlugin": "org.kde.image",
+    "lookAndFeelPackage": "com.muskos.accent",
+    "decoration": "MuskOS-rounded-blur",
+    "blur": "standard", "cornerRadius": 12
+  }
+}

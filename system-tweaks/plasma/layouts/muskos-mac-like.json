@@ -1,0 +1,20 @@
+{
+  "layout": "Mac-like",
+  "description": "Панель слева в стиле дока, глобальное меню сверху.",
+  "panels": [{
+    "location": "left", "alignment": "center", "floating": true,
+    "width": 68, "hideMode": "dodged",
+    "widgets": {
+      "org.kde.plasma.kickoff": { "iconOnly": true },
+      "org.kde.plasma.icontasks": { "iconOnly": true, "listStyle": "ThickIcons", "maxBreadth": 56 }
+    }
+  }, {
+    "location": "top", "alignment": "center", "height": 30,
+    "widgets": {
+      "org.kde.plasma.globalmenu": {},
+      "org.kde.plasma.systemtray": {},
+      "org.kde.plasma.digitalclock": { "appearance": "icontasks" }
+    }
+  }],
+  "theme": { "lookAndFeelPackage": "com.muskos.accent", "decoration": "MuskOS-rounded-blur", "blur": "standard" }
+}

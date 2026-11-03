@@ -1,0 +1,41 @@
+{
+    "Elements": {
+        "MuskOS-Accent": {
+            "DefaultContrast": 7,
+            "Descriptions": [
+                {
+                    "ColorSet": "Common",
+                    "General": {
+                        "Highlight": "#2D1B4E",
+                        "HighlightedText": "#FFFFFF",
+                        "Focus": "#65577C",
+                        "DecorationFocus": "#2D1B4E"
+                    }
+                },
+                {
+                    "ColorSet": "Dark",
+                    "General": {
+                        "Background": "#1A1622",
+                        "Foreground": "#EDEAF5",
+                        "Highlight": "#2D1B4E",
+                        "HighlightedText": "#FFFFFF"
+                    }
+                },
+                {
+                    "ColorSet": "Light",
+                    "General": {
+                        "Background": "#F4F2F8",
+                        "Foreground": "#1B1725",
+                        "Highlight": "#231540",
+                        "HighlightedText": "#FFFFFF"
+                    }
+                }
+            ],
+            "Name": "MuskOS Cosmic Night",
+            "metadata": {
+                "kcmouse/cursor_force_skin": {"value": "breeze_cursors"},
+                "com.muskos.accent/preset": {"value": "cosmic-night"}
+            }
+        }
+    }
+}

@@ -1,0 +1,14 @@
+{
+  "layout": "Right Side",
+  "description": "Вертикальная панель справа — для ультрашироких мониторов.",
+  "panels": [{
+    "location": "right", "alignment": "center", "width": 56, "floating": true,
+    "widgets": {
+      "org.kde.plasma.kickoff": { "iconOnly": true },
+      "org.kde.plasma.icontasks": { "iconOnly": true, "orientation": "vertical" },
+      "org.kde.plasma.systemtray": {},
+      "org.kde.plasma.digitalclock": { "appearance": "vertical" }
+    }
+  }],
+  "theme": { "lookAndFeelPackage": "com.muskos.accent", "decoration": "MuskOS-rounded-blur", "blur": "standard" }
+}

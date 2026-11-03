@@ -1,0 +1,21 @@
+# Calamares main settings — MuskOS 2.0
+sequence:
+  - name: showframe
+  - show:
+      - welcome
+      - locale
+      - partition
+      - users
+      - muskbrains          # step 5: "Мозги и Стиль" (custom module)
+      - packages            # step 6: browser/office/codecs/NVIDIA checkboxes
+      - summary             # step 7
+modules:
+  - {welcome: {showLanguageSelector: true, showVersion: false}}
+  - {locale: {locationZone: Europe/Berlin}}
+  - {partition: {options: [erase, manual, replace], doResize: true}}
+  - {users: {dontUseSameUsername: false}}
+  - muskbrains
+  - {packages: {packageOperations: install-muskos-selection}}
+  - {summary: {deployTarget: finish}}
+QtStyle: Breeze
+timeout: 30

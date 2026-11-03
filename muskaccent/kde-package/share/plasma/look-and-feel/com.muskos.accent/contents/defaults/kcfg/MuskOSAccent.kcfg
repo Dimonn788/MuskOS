@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE kcfg>
+<KCfg name="MuskOSAccent">
+  <include>colorscopesconfig.kcfg</include>
+  <group name="accent">
+    <!-- id of the chosen preset out of the fixed set of 20 -->
+    <entry key="preset" type="String" default="cosmic-night"/>
+    <!-- raw accent hex, e.g. #2D1B4E -->
+    <entry key="accentHex" type="String" default="#2D1B4E"/>
+    <entry key="mode" type="String" default="dark"/>
+  </group>
+</KCfg>
