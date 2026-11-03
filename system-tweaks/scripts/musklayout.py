@@ -29,6 +29,7 @@ Right-click menu hook ("Настроить панель" -> "Шаблоны Musk
 from __future__ import annotations
 
 import argparse
+import configparser
 import json
 import os
 import re
@@ -42,11 +43,6 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent                  # .../scripts
 PROJECT_ROOT = SCRIPT_DIR.parent.parent                       # repo root
 REPO_LAYOUTS = PROJECT_ROOT / "system-tweaks" / "plasma" / "layouts"
-TWEAKS_CANDIDATES = (
-    PROJECT_ROOT / "scripts" / "muskbottweaks" / "muskbottweaks.py",
-    SCRIPT_DIR / "muskbottweaks.py",
-    Path("/usr/share/muskos/scripts/muskbottweaks.py"),
-)
 
 HOME = Path(os.environ.get("MUSKHOME", str(Path.home())))
 LAYOUT_DIR = Path(os.environ.get("MUSKDATA", str(
@@ -80,14 +76,6 @@ def _run(cmd: list[str], timeout: int = 30) -> int:
                               timeout=timeout).returncode
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return 127
-
-
-def qdbus_bin() -> str | None:
-    for name in ("qdbus6", "qdbus-qt6", "qdbus"):
-        p = shutil.which(name)
-        if p:
-            return p
-    return None
 
 
 def plasmashell_running() -> bool:
@@ -256,9 +244,17 @@ def cmd_list(_: argparse.Namespace) -> int:
     return 0
 
 
+LAYOUT_STATE = HOME / ".config" / "muskos" / "layout.conf"
+
+
 def cmd_current(_: argparse.Namespace) -> int:
-    st = HOME / ".config" / "muskos" / "layout.conf"
-    print(st.read_text(encoding="utf-8").strip() if st.exists() else "(нет сохранённого макета)")
+    if LAYOUT_STATE.exists():
+        cp = configparser.ConfigParser()
+        cp.read(LAYOUT_STATE, encoding="utf-8")
+        sec = cp["layout"] if cp.has_section("layout") else {}
+        print(sec.get("layout", "(пусто)"))
+        return 0
+    print("(нет сохранённого макета)")
     return 0
 
 
@@ -282,8 +278,11 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
     txt = render_appletsrc(spec)
     atomic_write(APPLETSRC, txt)
-    _write_state(HOME / ".config" / "muskos" / "layout.conf",
-                 f"layout={key}\nsource=musklayout\nbackup={backup or ''}\n")
+    _write_state(LAYOUT_STATE,
+                 "[layout]\n"
+                 f"layout={key}\n"
+                 "source=musklayout\n"
+                 f"backup={backup or ''}\n")
 
     result = reload_shell()
     if result == "failed" and backup is not None:

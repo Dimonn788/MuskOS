@@ -17,7 +17,6 @@ What `apply` does, in order:
   2. Derives the WCAG-checked token set and writes:
        ~/.config/kdeglobals            (Breeze [Colors:*] groups, case-safe merge)
        ~/.config/plasmashellrc         ([General] AccentColor=r,g,b — Plasma 6)
-       ~/.config/kwinrc                ([Plugins/borderarea...] nothing; kwin reconfigure)
        ~/.local/share/dlt-plasmo/dockerc (window decoration colors)
   3. Persists the choice in ~/.config/muskos/accent.conf (login service re-applies).
   4. Repaints the LIVE session without logout — see `reload_session()`:
@@ -291,9 +290,9 @@ def reload_session(force_restart: bool = False) -> str:
         rc = _run([sys.executable, str(tweaks), "apply"], timeout=30)
         if rc == 0:
             print(f"  ✓ muskbottweaks push: {tweaks}")
-    _run(["kwin_wayland", "--reconfigure"], timeout=5)   # harmless if unknown arg
-    _run([qdbus_bin() or "true", "org.kde.KWin", "/KWin",
-          "org.kde.KWin.reconfigure"], timeout=10)
+    bus = qdbus_bin()
+    if bus:                                            # window decorations only
+        _run([bus, "org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure"], timeout=10)
     if not force_restart and evaluate_script(_EVAL_SCRIPT):
         print("  ✓ evaluateScript → живая перекраска без рестарта")
         # evaluateScript alone may not re-resolve the accent for all applets;
@@ -377,7 +376,7 @@ def cmd_show(_: argparse.Namespace) -> int:
     for k, v in sorted(derive_tokens(st["accent"]).items()):
         print(f"  {k:<24} {v}")
     tweaks = find_tweaks_script()
-    print(f"  {'muskbotweaks':<24} {tweaks if tweaks else 'NOT FOUND'}")
+    print(f"  {'muskbottweaks':<24} {tweaks if tweaks else 'NOT FOUND'}")
     return 0
 
 
